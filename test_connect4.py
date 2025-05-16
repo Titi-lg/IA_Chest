@@ -68,59 +68,102 @@ def play_game(ai1, ai2, verbose=True):
         print("It's a draw!")
     return 0, moves_count  # 0 for draw
 
-def tournament(algorithms, num_games=10, verbose=False):
-    """Run a tournament among all algorithms"""
+def tournament(algorithms, num_iterations=5, verbose=False):
+    """Run a ladder tournament with Bo3 matches"""
+    # Initialize rankings and results
+    rankings = list(range(len(algorithms)))  # Initial ranking
     results = {algo.__class__.__name__: {'wins': 0, 'draws': 0, 'losses': 0} for algo in algorithms}
     total_moves = {algo.__class__.__name__: 0 for algo in algorithms}
     
-    games_played = 0
-    for i in range(len(algorithms)):
-        for j in range(len(algorithms)):
-            if i == j:
-                continue  # Skip same algorithm matchups
-                
-            for _ in range(num_games // 2):
-                # Each pair plays twice, alternating who goes first
-                winner, moves = play_game(algorithms[i], algorithms[j], verbose)
-                games_played += 1
-                
-                algo1_name = algorithms[i].__class__.__name__
-                algo2_name = algorithms[j].__class__.__name__
-                
-                # Record moves
-                total_moves[algo1_name] += moves // 2
-                total_moves[algo2_name] += moves // 2
-                
-                if winner == 1:
-                    results[algo1_name]['wins'] += 1
-                    results[algo2_name]['losses'] += 1
-                elif winner == 2:
-                    results[algo1_name]['losses'] += 1
-                    results[algo2_name]['wins'] += 1
-                else:
-                    results[algo1_name]['draws'] += 1
-                    results[algo2_name]['draws'] += 1
+    # Run tournament for specified number of iterations
+    for iteration in range(num_iterations):
+        print(f"\n=== Tournament Iteration {iteration+1}/{num_iterations} ===")
+        print("Current Ranking:")
+        for rank, idx in enumerate(rankings):
+            print(f"{rank+1}. {algorithms[idx].__class__.__name__}")
+        
+        # For each position except the top one
+        for pos in range(len(rankings)-1):
+            # Get the algorithms at current and next position
+            algo_idx_lower = rankings[pos+1]
+            algo_idx_higher = rankings[pos]
+            
+            algo_lower = algorithms[algo_idx_lower]
+            algo_higher = algorithms[algo_idx_higher]
+            
+            algo_lower_name = algo_lower.__class__.__name__
+            algo_higher_name = algo_higher.__class__.__name__
+            
+            print(f"\nMatch: {algo_lower_name} vs {algo_higher_name} (Bo3)")
+            
+            # Play best of 3
+            lower_wins = 0
+            higher_wins = 0
+            games_played = 0
+            total_match_moves = 0
+            
+            while games_played < 3 and lower_wins < 2 and higher_wins < 2:
+                # Alternate who goes first
+                if games_played % 2 == 0:
+                    # Lower ranked algo goes first
+                    winner, moves = play_game(algo_lower, algo_higher, verbose)
                     
-                # Play again with players swapped
-                winner, moves = play_game(algorithms[j], algorithms[i], verbose)
-                games_played += 1
-                
-                # Record moves
-                total_moves[algo1_name] += moves // 2
-                total_moves[algo2_name] += moves // 2
-                
-                if winner == 1:
-                    results[algo2_name]['wins'] += 1
-                    results[algo1_name]['losses'] += 1
-                elif winner == 2:
-                    results[algo2_name]['losses'] += 1
-                    results[algo1_name]['wins'] += 1
+                    if winner == 1:  # Lower ranked won
+                        lower_wins += 1
+                        results[algo_lower_name]['wins'] += 1
+                        results[algo_higher_name]['losses'] += 1
+                        print(f"Game {games_played+1}: {algo_lower_name} wins")
+                    elif winner == 2:  # Higher ranked won
+                        higher_wins += 1
+                        results[algo_higher_name]['wins'] += 1
+                        results[algo_lower_name]['losses'] += 1
+                        print(f"Game {games_played+1}: {algo_higher_name} wins")
+                    else:  # Draw
+                        results[algo_lower_name]['draws'] += 1
+                        results[algo_higher_name]['draws'] += 1
+                        print(f"Game {games_played+1}: Draw")
                 else:
-                    results[algo1_name]['draws'] += 1
-                    results[algo2_name]['draws'] += 1
+                    # Higher ranked algo goes first
+                    winner, moves = play_game(algo_higher, algo_lower, verbose)
+                    
+                    if winner == 1:  # Higher ranked won
+                        higher_wins += 1
+                        results[algo_higher_name]['wins'] += 1
+                        results[algo_lower_name]['losses'] += 1
+                        print(f"Game {games_played+1}: {algo_higher_name} wins")
+                    elif winner == 2:  # Lower ranked won
+                        lower_wins += 1
+                        results[algo_lower_name]['wins'] += 1
+                        results[algo_higher_name]['losses'] += 1
+                        print(f"Game {games_played+1}: {algo_lower_name} wins")
+                    else:  # Draw
+                        results[algo_lower_name]['draws'] += 1
+                        results[algo_higher_name]['draws'] += 1
+                        print(f"Game {games_played+1}: Draw")
+                
+                games_played += 1
+                total_match_moves += moves
+            
+            # Record moves
+            total_moves[algo_higher_name] += total_match_moves // 2
+            total_moves[algo_lower_name] += total_match_moves // 2
+            
+            # Print match result
+            print(f"Match result: {algo_lower_name} {lower_wins} - {higher_wins} {algo_higher_name}")
+            
+            # If the lower-ranked algorithm won, swap positions
+            if lower_wins > higher_wins:
+                print(f"{algo_lower_name} wins the match and moves up!")
+                rankings[pos], rankings[pos+1] = rankings[pos+1], rankings[pos]
+            else:
+                print(f"{algo_higher_name} maintains position.")
     
-    # Print tournament results
-    print(f"\n=== Tournament Results ({games_played} games) ===")
+    # Print final tournament results
+    print(f"\n=== Final Ranking ===")
+    for rank, idx in enumerate(rankings):
+        print(f"{rank+1}. {algorithms[idx].__class__.__name__}")
+    
+    print(f"\n=== Tournament Statistics ===")
     print(f"{'Algorithm':<15} {'Wins':<8} {'Draws':<8} {'Losses':<8} {'Win %':<8} {'Avg Moves':<12}")
     print("-" * 60)
     
@@ -131,7 +174,7 @@ def tournament(algorithms, num_games=10, verbose=False):
             avg_moves = total_moves[algo_name] / games if games > 0 else 0
             print(f"{algo_name:<15} {stats['wins']:<8} {stats['draws']:<8} {stats['losses']:<8} {win_percentage:.1f}%    {avg_moves:.1f}")
     
-    return results
+    return rankings, results
 
 def main():
     print("Connect4 AI Testing")
@@ -174,10 +217,10 @@ def main():
     
     elif choice == '2':
         # Tournament
-        num_games = int(input("Number of games between each pair of algorithms: "))
+        num_iterations = int(input("Number of tournament iterations: "))
         verbose = input("Show detailed game information? (y/n): ").lower() == 'y'
         
-        tournament(algorithms, num_games=num_games, verbose=verbose)
+        tournament(algorithms, num_iterations=num_iterations, verbose=verbose)
     
     elif choice == '3':
         # Human vs AI
