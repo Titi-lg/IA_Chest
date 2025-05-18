@@ -1,5 +1,6 @@
 from game.abstract_game import AbstractGame
 import numpy as np
+import time
 
 # Constants for pieces (using standard piece values for evaluation)
 EMPTY = 0
@@ -13,6 +14,12 @@ KING = 100
 # Piece colors
 WHITE = 1
 BLACK = 2
+
+# Precalculated direction offsets for sliding pieces
+BISHOP_DIRECTIONS = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
+ROOK_DIRECTIONS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+KNIGHT_OFFSETS = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
+KING_OFFSETS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 class ChessGame(AbstractGame):
     def __init__(self):
@@ -39,6 +46,133 @@ class ChessGame(AbstractGame):
         
         # Fullmove number
         self.fullmove_number = 1
+        
+        # Cache king positions for faster check detection
+        self.white_king_pos = (0, 4)
+        self.black_king_pos = (7, 4)
+        
+        # Add move cache
+        self.move_cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.board_hash = None
+        self.update_board_hash()
+        
+        # Piece-square tables for faster evaluation
+        self.initialize_piece_square_tables()
+    
+    def update_board_hash(self):
+        """Update the hash of the current board state for cache lookup"""
+        self.board_hash = hash(self.board.tobytes())
+    
+    def initialize_piece_square_tables(self):
+        """Initialize piece-square tables for positional evaluation"""
+        # Simplified tables - center control is preferred
+        self.pawn_table = np.array([
+            [0,  0,  0,  0,  0,  0,  0,  0],
+            [50, 50, 50, 50, 50, 50, 50, 50],
+            [10, 10, 20, 30, 30, 20, 10, 10],
+            [5,  5, 10, 25, 25, 10,  5,  5],
+            [0,  0,  0, 20, 20,  0,  0,  0],
+            [5, -5,-10,  0,  0,-10, -5,  5],
+            [5, 10, 10,-20,-20, 10, 10,  5],
+            [0,  0,  0,  0,  0,  0,  0,  0]
+        ])
+        
+        self.knight_table = np.array([
+            [-50,-40,-30,-30,-30,-30,-40,-50],
+            [-40,-20,  0,  0,  0,  0,-20,-40],
+            [-30,  0, 10, 15, 15, 10,  0,-30],
+            [-30,  5, 15, 20, 20, 15,  5,-30],
+            [-30,  0, 15, 20, 20, 15,  0,-30],
+            [-30,  5, 10, 15, 15, 10,  5,-30],
+            [-40,-20,  0,  5,  5,  0,-20,-40],
+            [-50,-40,-30,-30,-30,-30,-40,-50]
+        ])
+        
+        self.bishop_table = np.array([
+            [-20,-10,-10,-10,-10,-10,-10,-20],
+            [-10,  0,  0,  0,  0,  0,  0,-10],
+            [-10,  0, 10, 10, 10, 10,  0,-10],
+            [-10,  5,  5, 10, 10,  5,  5,-10],
+            [-10,  0,  5, 10, 10,  5,  0,-10],
+            [-10,  5,  5,  5,  5,  5,  5,-10],
+            [-10,  0,  5,  0,  0,  0,  0,-10],
+            [-20,-10,-10,-10,-10,-10,-10,-20]
+        ])
+        
+        self.rook_table = np.array([
+            [0,  0,  0,  0,  0,  0,  0,  0],
+            [5, 10, 10, 10, 10, 10, 10,  5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [-5,  0,  0,  0,  0,  0,  0, -5],
+            [0,  0,  0,  5,  5,  0,  0,  0]
+        ])
+        
+        self.queen_table = np.array([
+            [-20,-10,-10, -5, -5,-10,-10,-20],
+            [-10,  0,  0,  0,  0,  0,  0,-10],
+            [-10,  0,  5,  5,  5,  5,  0,-10],
+            [-5,   0,  5,  5,  5,  5,  0, -5],
+            [0,    0,  5,  5,  5,  5,  0, -5],
+            [-10,  5,  5,  5,  5,  5,  0,-10],
+            [-10,  0,  5,  0,  0,  0,  0,-10],
+            [-20,-10,-10, -5, -5,-10,-10,-20]
+        ])
+        
+        self.king_table = np.array([
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-30,-40,-40,-50,-50,-40,-40,-30],
+            [-20,-30,-30,-40,-40,-30,-30,-20],
+            [-10,-20,-20,-20,-20,-20,-20,-10],
+            [20, 20,  0,  0,  0,  0, 20, 20],
+            [20, 30, 10,  0,  0, 10, 30, 20]
+        ])
+    
+    def clone(self):
+        """Create an efficient copy of the current game state"""
+        new_game = ChessGame.__new__(ChessGame)
+        new_game.board = np.copy(self.board)
+        new_game.current_player = self.current_player
+        new_game.move_history = list(self.move_history)
+        
+        # Copy castling rights
+        new_game.white_king_moved = self.white_king_moved
+        new_game.black_king_moved = self.black_king_moved
+        new_game.white_kingside_rook_moved = self.white_kingside_rook_moved
+        new_game.white_queenside_rook_moved = self.white_queenside_rook_moved
+        new_game.black_kingside_rook_moved = self.black_kingside_rook_moved
+        new_game.black_queenside_rook_moved = self.black_queenside_rook_moved
+        
+        # Copy other state variables
+        new_game.en_passant_target = self.en_passant_target
+        new_game.halfmove_clock = self.halfmove_clock
+        new_game.fullmove_number = self.fullmove_number
+        
+        # Copy king positions
+        new_game.white_king_pos = self.white_king_pos
+        new_game.black_king_pos = self.black_king_pos
+        
+        # Initialize empty move cache
+        new_game.move_cache = {}
+        new_game.cache_hits = 0
+        new_game.cache_misses = 0
+        new_game.board_hash = self.board_hash
+        
+        # Copy piece-square tables (reference is okay since they don't change)
+        new_game.pawn_table = self.pawn_table
+        new_game.knight_table = self.knight_table
+        new_game.bishop_table = self.bishop_table
+        new_game.rook_table = self.rook_table
+        new_game.queen_table = self.queen_table
+        new_game.king_table = self.king_table
+        
+        return new_game
     
     def setup_board(self):
         """Set up the initial chess position"""
@@ -72,10 +206,33 @@ class ChessGame(AbstractGame):
         return self.board
     
     def get_valid_moves(self):
-        """Returns a list of valid moves in the current state"""
+        """Returns a list of valid moves in the current state, using cache when possible"""
+        # Check if we already calculated these moves
+        cache_key = (self.board_hash, self.current_player)
+        if cache_key in self.move_cache:
+            self.cache_hits += 1
+            return self.move_cache[cache_key]
+        
+        self.cache_misses += 1
+        # Generate all pseudo-legal moves
+        moves = self._generate_pseudo_legal_moves()
+        
+        # Filter out moves that would leave king in check
+        valid_moves = []
+        for move in moves:
+            temp_game = self.clone()
+            temp_game.make_move(move, self.current_player)
+            if not temp_game._is_in_check(self.current_player):
+                valid_moves.append(move)
+        
+        # Cache the results
+        self.move_cache[cache_key] = valid_moves
+        return valid_moves
+    
+    def _generate_pseudo_legal_moves(self):
+        """Generate all pseudo-legal moves without checking for check"""
         moves = []
         player = self.current_player
-        sign = 1 if player == WHITE else -1
         
         for row in range(8):
             for col in range(8):
@@ -100,17 +257,228 @@ class ChessGame(AbstractGame):
                     moves.extend(self._get_queen_moves(row, col, player))
                 elif piece_type == KING:
                     moves.extend(self._get_king_moves(row, col, player))
+        
+        return moves
+
+    def make_move(self, move, player):
+        """Makes a move on the board for the given player"""
+        from_pos, to_pos = move
+        from_row, from_col = from_pos
+        to_row, to_col = to_pos
+        
+        # Store previous state for en passant detection
+        prev_board = np.copy(self.board)
+        
+        # Reset en passant target
+        old_en_passant = self.en_passant_target
+        self.en_passant_target = None
+        
+        # Get the moving piece
+        piece = self.board[from_row][from_col]
+        abs_piece = abs(piece)
+        
+        # Check if this is a capture move
+        is_capture = self.board[to_row][to_col] != 0
+        
+        # Update halfmove clock
+        if abs_piece == PAWN or is_capture:
+            self.halfmove_clock = 0
+        else:
+            self.halfmove_clock += 1
+        
+        # Handle special pawn moves
+        if abs_piece == PAWN:
+            # Double push (set en passant target)
+            if abs(from_row - to_row) == 2:
+                self.en_passant_target = (from_row + (to_row - from_row) // 2, from_col)
+            
+            # En passant capture
+            elif to_pos == old_en_passant:
+                # Remove the captured pawn
+                ep_row = to_row - (1 if player == WHITE else -1)
+                self.board[ep_row][to_col] = 0
+            
+            # Promotion (default to queen)
+            elif (player == WHITE and to_row == 7) or (player == BLACK and to_row == 0):
+                piece = QUEEN if player == WHITE else -QUEEN
+        
+        # Handle castling
+        elif abs_piece == KING:
+            # Update king moved status and king position cache
+            if player == WHITE:
+                self.white_king_moved = True
+                self.white_king_pos = (to_row, to_col)
+            else:
+                self.black_king_moved = True
+                self.black_king_pos = (to_row, to_col)
                 
-        # Filter out moves that would leave king in check
-        valid_moves = []
-        for move in moves:
-            temp_game = self.clone()
-            temp_game.make_move(move, player)
-            if not temp_game._is_in_check(player):
-                valid_moves.append(move)
-                
-        return valid_moves
+            # Kingside castling
+            if from_col == 4 and to_col == 6:
+                # Move the rook
+                self.board[from_row][7] = 0
+                self.board[from_row][5] = ROOK if player == WHITE else -ROOK
+            
+            # Queenside castling
+            elif from_col == 4 and to_col == 2:
+                # Move the rook
+                self.board[from_row][0] = 0
+                self.board[from_row][3] = ROOK if player == WHITE else -ROOK
+        
+        # Handle rook moves for castling rights
+        elif abs_piece == ROOK:
+            if player == WHITE:
+                if from_row == 0 and from_col == 0:
+                    self.white_queenside_rook_moved = True
+                elif from_row == 0 and from_col == 7:
+                    self.white_kingside_rook_moved = True
+            else:
+                if from_row == 7 and from_col == 0:
+                    self.black_queenside_rook_moved = True
+                elif from_row == 7 and from_col == 7:
+                    self.black_kingside_rook_moved = True
+        
+        # Move the piece
+        self.board[to_row][to_col] = piece
+        self.board[from_row][from_col] = 0
+        
+        # Update fullmove number
+        if player == BLACK:
+            self.fullmove_number += 1
+        
+        # Switch current player
+        self.current_player = self.get_opponent(player)
+        
+        # Record the move
+        self.move_history.append(move)
+        
+        # Clear move cache and update board hash
+        self.move_cache = {}
+        self.update_board_hash()
+        
+        return True
     
+    def is_terminal(self):
+        """Checks if the game is over"""
+        # Check for checkmate or stalemate
+        white_moves = len(self._get_moves_for_player(WHITE))
+        black_moves = len(self._get_moves_for_player(BLACK))
+        
+        # No legal moves for current player
+        if (self.current_player == WHITE and white_moves == 0) or \
+           (self.current_player == BLACK and black_moves == 0):
+            return True
+        
+        # 50-move rule
+        if self.halfmove_clock >= 100:  # 50 full moves
+            return True
+        
+        # Insufficient material (simplified)
+        remaining_pieces = [abs(self.board[r][c]) for r in range(8) for c in range(8) if self.board[r][c] != 0]
+        if len(remaining_pieces) <= 2:  # Just kings
+            return True
+        if len(remaining_pieces) == 3 and (KNIGHT in remaining_pieces or BISHOP in remaining_pieces):
+            # King + King + Bishop/Knight
+            return True
+        
+        return False
+    
+    def _get_moves_for_player(self, player):
+        """Get all legal moves for a specific player"""
+        # Save current player
+        current = self.current_player
+        # Set requested player
+        self.current_player = player
+        # Get moves
+        moves = self.get_valid_moves()
+        # Restore current player
+        self.current_player = current
+        return moves
+    
+    def evaluate(self, player):
+        """Evaluates the board for the given player with optimized evaluation"""
+        if self.is_terminal():
+            # Check for checkmate
+            opponent = self.get_opponent(player)
+            if self._is_in_check(opponent) and len(self._get_moves_for_player(opponent)) == 0:
+                return float('inf')  # Player wins
+            elif self._is_in_check(player) and len(self._get_moves_for_player(player)) == 0:
+                return float('-inf')  # Player loses
+            else:
+                return 0  # Draw
+        
+        # Material and positional evaluation using piece-square tables
+        white_score = 0
+        black_score = 0
+        
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                
+                if piece > 0:  # White piece
+                    piece_type = piece
+                    # Material value
+                    white_score += abs(piece)
+                    
+                    # Position value
+                    if piece_type == PAWN:
+                        white_score += self.pawn_table[row][col] / 100
+                    elif piece_type == KNIGHT:
+                        white_score += self.knight_table[row][col] / 100
+                    elif piece_type == BISHOP:
+                        white_score += self.bishop_table[row][col] / 100
+                    elif piece_type == ROOK:
+                        white_score += self.rook_table[row][col] / 100
+                    elif piece_type == QUEEN:
+                        white_score += self.queen_table[row][col] / 100
+                    elif piece_type == KING:
+                        white_score += self.king_table[row][col] / 100
+                
+                elif piece < 0:  # Black piece
+                    piece_type = abs(piece)
+                    # Material value
+                    black_score += piece_type
+                    
+                    # Position value (flip the board for black)
+                    if piece_type == PAWN:
+                        black_score += self.pawn_table[7-row][col] / 100
+                    elif piece_type == KNIGHT:
+                        black_score += self.knight_table[7-row][col] / 100
+                    elif piece_type == BISHOP:
+                        black_score += self.bishop_table[7-row][col] / 100
+                    elif piece_type == ROOK:
+                        black_score += self.rook_table[7-row][col] / 100
+                    elif piece_type == QUEEN:
+                        black_score += self.queen_table[7-row][col] / 100
+                    elif piece_type == KING:
+                        black_score += self.king_table[7-row][col] / 100
+        
+        # Mobility bonus
+        mobility_bonus = 0.1
+        white_mobility = len(self._get_pseudo_legal_moves_for_player(WHITE))
+        black_mobility = len(self._get_pseudo_legal_moves_for_player(BLACK))
+        
+        white_score += white_mobility * mobility_bonus
+        black_score += black_mobility * mobility_bonus
+        
+        # King safety bonus
+        if self._is_in_check(WHITE):
+            white_score -= 1.0
+        if self._is_in_check(BLACK):
+            black_score -= 1.0
+            
+        if player == WHITE:
+            return white_score - black_score
+        else:
+            return black_score - white_score
+    
+    def _get_pseudo_legal_moves_for_player(self, player):
+        """Get pseudo-legal moves for a player without check validation (for evaluation only)"""
+        current = self.current_player
+        self.current_player = player
+        moves = self._generate_pseudo_legal_moves()
+        self.current_player = current
+        return moves
+
     def _get_pawn_moves(self, row, col, player):
         """Get all valid pawn moves"""
         moves = []
@@ -142,9 +510,8 @@ class ChessGame(AbstractGame):
     def _get_knight_moves(self, row, col, player):
         """Get all valid knight moves"""
         moves = []
-        offsets = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
         
-        for r_offset, c_offset in offsets:
+        for r_offset, c_offset in KNIGHT_OFFSETS:
             new_row, new_col = row + r_offset, col + c_offset
             if 0 <= new_row < 8 and 0 <= new_col < 8:
                 target = self.board[new_row][new_col]
@@ -156,9 +523,8 @@ class ChessGame(AbstractGame):
     def _get_bishop_moves(self, row, col, player):
         """Get all valid bishop moves"""
         moves = []
-        directions = [(-1, -1), (-1, 1), (1, -1), (1, 1)]  # Diagonals
         
-        for r_dir, c_dir in directions:
+        for r_dir, c_dir in BISHOP_DIRECTIONS:
             for i in range(1, 8):
                 new_row, new_col = row + i * r_dir, col + i * c_dir
                 if not (0 <= new_row < 8 and 0 <= new_col < 8):
@@ -178,9 +544,8 @@ class ChessGame(AbstractGame):
     def _get_rook_moves(self, row, col, player):
         """Get all valid rook moves"""
         moves = []
-        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # Orthogonals
         
-        for r_dir, c_dir in directions:
+        for r_dir, c_dir in ROOK_DIRECTIONS:
             for i in range(1, 8):
                 new_row, new_col = row + i * r_dir, col + i * c_dir
                 if not (0 <= new_row < 8 and 0 <= new_col < 8):
@@ -204,10 +569,9 @@ class ChessGame(AbstractGame):
     def _get_king_moves(self, row, col, player):
         """Get all valid king moves"""
         moves = []
-        offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
         
         # Regular king moves
-        for r_offset, c_offset in offsets:
+        for r_offset, c_offset in KING_OFFSETS:
             new_row, new_col = row + r_offset, col + c_offset
             if 0 <= new_row < 8 and 0 <= new_col < 8:
                 target = self.board[new_row][new_col]
@@ -296,225 +660,12 @@ class ChessGame(AbstractGame):
     
     def _is_in_check(self, player):
         """Check if the specified player is in check"""
-        # Find the king
-        king_value = KING if player == WHITE else -KING
-        king_pos = None
-        for row in range(8):
-            for col in range(8):
-                if self.board[row][col] == king_value:
-                    king_pos = (row, col)
-                    break
-            if king_pos:
-                break
-        
-        # If no king found, something is wrong
-        if not king_pos:
-            return False
+        # Use cached king position instead of searching the board
+        king_pos = self.white_king_pos if player == WHITE else self.black_king_pos
         
         # Check if king is under attack
         opponent = BLACK if player == WHITE else WHITE
         return self._is_square_attacked(king_pos[0], king_pos[1], opponent)
-    
-    def make_move(self, move, player):
-        """Makes a move on the board for the given player"""
-        from_pos, to_pos = move
-        from_row, from_col = from_pos
-        to_row, to_col = to_pos
-        
-        # Store previous state for en passant detection
-        prev_board = np.copy(self.board)
-        
-        # Reset en passant target
-        old_en_passant = self.en_passant_target
-        self.en_passant_target = None
-        
-        # Get the moving piece
-        piece = self.board[from_row][from_col]
-        abs_piece = abs(piece)
-        
-        # Check if this is a capture move
-        is_capture = self.board[to_row][to_col] != 0
-        
-        # Update halfmove clock
-        if abs_piece == PAWN or is_capture:
-            self.halfmove_clock = 0
-        else:
-            self.halfmove_clock += 1
-        
-        # Handle special pawn moves
-        if abs_piece == PAWN:
-            # Double push (set en passant target)
-            if abs(from_row - to_row) == 2:
-                self.en_passant_target = (from_row + (to_row - from_row) // 2, from_col)
-            
-            # En passant capture
-            elif to_pos == old_en_passant:
-                # Remove the captured pawn
-                ep_row = to_row - (1 if player == WHITE else -1)
-                self.board[ep_row][to_col] = 0
-            
-            # Promotion (default to queen)
-            elif (player == WHITE and to_row == 7) or (player == BLACK and to_row == 0):
-                piece = QUEEN if player == WHITE else -QUEEN
-        
-        # Handle castling
-        elif abs_piece == KING:
-            # Update king moved status
-            if player == WHITE:
-                self.white_king_moved = True
-            else:
-                self.black_king_moved = True
-                
-            # Kingside castling
-            if from_col == 4 and to_col == 6:
-                # Move the rook
-                self.board[from_row][7] = 0
-                self.board[from_row][5] = ROOK if player == WHITE else -ROOK
-            
-            # Queenside castling
-            elif from_col == 4 and to_col == 2:
-                # Move the rook
-                self.board[from_row][0] = 0
-                self.board[from_row][3] = ROOK if player == WHITE else -ROOK
-        
-        # Handle rook moves for castling rights
-        elif abs_piece == ROOK:
-            if player == WHITE:
-                if from_row == 0 and from_col == 0:
-                    self.white_queenside_rook_moved = True
-                elif from_row == 0 and from_col == 7:
-                    self.white_kingside_rook_moved = True
-            else:
-                if from_row == 7 and from_col == 0:
-                    self.black_queenside_rook_moved = True
-                elif from_row == 7 and from_col == 7:
-                    self.black_kingside_rook_moved = True
-        
-        # Move the piece
-        self.board[to_row][to_col] = piece
-        self.board[from_row][from_col] = 0
-        
-        # Update fullmove number
-        if player == BLACK:
-            self.fullmove_number += 1
-        
-        # Switch current player
-        self.current_player = self.get_opponent(player)
-        
-        # Record the move
-        self.move_history.append(move)
-        
-        return True
-    
-    def is_terminal(self):
-        """Checks if the game is over"""
-        # Check for checkmate or stalemate
-        white_moves = len(self._get_moves_for_player(WHITE))
-        black_moves = len(self._get_moves_for_player(BLACK))
-        
-        # No legal moves for current player
-        if (self.current_player == WHITE and white_moves == 0) or \
-           (self.current_player == BLACK and black_moves == 0):
-            return True
-        
-        # 50-move rule
-        if self.halfmove_clock >= 100:  # 50 full moves
-            return True
-        
-        # Insufficient material (simplified)
-        remaining_pieces = [abs(self.board[r][c]) for r in range(8) for c in range(8) if self.board[r][c] != 0]
-        if len(remaining_pieces) <= 2:  # Just kings
-            return True
-        if len(remaining_pieces) == 3 and (KNIGHT in remaining_pieces or BISHOP in remaining_pieces):
-            # King + King + Bishop/Knight
-            return True
-        
-        return False
-    
-    def _get_moves_for_player(self, player):
-        """Get all legal moves for a specific player"""
-        # Save current player
-        current = self.current_player
-        # Set requested player
-        self.current_player = player
-        # Get moves
-        moves = self.get_valid_moves()
-        # Restore current player
-        self.current_player = current
-        return moves
-    
-    def evaluate(self, player):
-        """Evaluates the board for the given player"""
-        if self.is_terminal():
-            # Check for checkmate
-            opponent = self.get_opponent(player)
-            if self._is_in_check(opponent) and len(self._get_moves_for_player(opponent)) == 0:
-                return float('inf')  # Player wins
-            elif self._is_in_check(player) and len(self._get_moves_for_player(player)) == 0:
-                return float('-inf')  # Player loses
-            else:
-                return 0  # Draw
-        
-        # Material evaluation
-        white_material = 0
-        black_material = 0
-        
-        for row in range(8):
-            for col in range(8):
-                piece = self.board[row][col]
-                if piece > 0:
-                    white_material += abs(piece)
-                elif piece < 0:
-                    black_material += abs(piece)
-        
-        # Position evaluation (simplified)
-        white_position = self._evaluate_position(WHITE)
-        black_position = self._evaluate_position(BLACK)
-        
-        # Combine material and position evaluations
-        white_score = white_material + white_position
-        black_score = black_material + black_position
-        
-        if player == WHITE:
-            return white_score - black_score
-        else:
-            return black_score - white_score
-    
-    def _evaluate_position(self, player):
-        """Simple positional evaluation"""
-        score = 0
-        sign = 1 if player == WHITE else -1
-        
-        # Control of center
-        center_squares = [(3, 3), (3, 4), (4, 3), (4, 4)]
-        for row, col in center_squares:
-            piece = self.board[row][col]
-            if piece * sign > 0:  # Player's piece
-                score += 0.5
-        
-        # Development in opening
-        if len(self.move_history) < 20:  # Early game
-            # Knights and bishops out
-            if player == WHITE:
-                if self.board[0][1] == 0:  # Knight moved
-                    score += 0.3
-                if self.board[0][6] == 0:  # Knight moved
-                    score += 0.3
-                if self.board[0][2] == 0:  # Bishop moved
-                    score += 0.3
-                if self.board[0][5] == 0:  # Bishop moved
-                    score += 0.3
-            else:
-                if self.board[7][1] == 0:  # Knight moved
-                    score += 0.3
-                if self.board[7][6] == 0:  # Knight moved
-                    score += 0.3
-                if self.board[7][2] == 0:  # Bishop moved
-                    score += 0.3
-                if self.board[7][5] == 0:  # Bishop moved
-                    score += 0.3
-        
-        return score
     
     def check_win(self, player):
         """Checks if the specified player has won"""

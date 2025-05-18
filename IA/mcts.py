@@ -1,7 +1,6 @@
 import random
 import time
 import math
-from copy import deepcopy
 
 class MCTSMeta:
     EXPLORATION = 1.41  # UCB1 exploration parameter
@@ -21,6 +20,7 @@ class Node:
         self.Q = 0  # Total score
         self.children = {}
         self.outcome = GameMeta.ONGOING
+        self.untried_moves = []  # Store untried moves for faster expansion
 
     def add_children(self, children: dict) -> None:
         for child in children:
@@ -31,6 +31,10 @@ class Node:
             return 0 if explore == 0 else GameMeta.INF
         else:
             return self.Q / self.N + explore * math.sqrt(math.log(self.parent.N) / self.N)
+
+    def is_fully_expanded(self):
+        """Check if all possible moves have been tried from this node"""
+        return len(self.untried_moves) == 0
 
 
 class MCTS:
@@ -47,20 +51,23 @@ class MCTS:
         self.thinking_time = float(thinking_time/1000)  # Convert to seconds
         self.root_game = None
         self.current_player = None
+        
+        # Performance monitoring
+        self.nodes_created = 0
+        self.total_playouts = 0
     
     def get_move(self, game, player):
-        """Get the best move according to the MCTS algorithm
-        
-        Args:
-            game: The current game state (AbstractGame)
-            player: The current player
-            
-        Returns:
-            The best move
-        """
-        self.root_game = game.clone()
+        """Get the best move according to the MCTS algorithm"""
+        self.root_game = game.clone()  # Only clone once at the beginning
         self.current_player = player
         self.root = Node(None, None)
+        
+        # Initialize root's untried moves
+        self.root.untried_moves = self.root_game.get_valid_moves()
+        
+        # Track nodes and playouts
+        self.nodes_created = 1  # Root
+        self.total_playouts = 0
         
         # Check if game is already over
         if game.is_terminal():
@@ -73,17 +80,14 @@ class MCTS:
         return self.best_move()
 
     def select_node(self) -> tuple:
-        """Select a node to expand or simulate
-        
-        Returns:
-            A tuple (node, game_state)
-        """
+        """Select a node to expand or simulate using UCB1"""
         node = self.root
-        game = deepcopy(self.root_game)
+        game = self.root_game.clone()  # Clone only once per selection
         current_player = self.current_player
 
-        # Traverse the tree until we find a node to expand or simulate
-        while len(node.children) != 0:
+        # Selection phase - traverse tree until we find a node to expand
+        while not node.is_fully_expanded() and len(node.children) > 0:
+            # Select child with highest UCB value
             children = node.children.values()
             max_value = max(children, key=lambda n: n.value()).value()
             max_nodes = [n for n in children if n.value() == max_value]
@@ -99,49 +103,58 @@ class MCTS:
             if node.N == 0:
                 return node, game, current_player
 
-        # If we reach a leaf node, try to expand it
-        if self.expand(node, game, current_player):
-            # Choose a child node randomly
-            node = random.choice(list(node.children.values()))
-            game.make_move(node.move, current_player)
+        # Expansion phase - if we reach a leaf node that's not fully expanded
+        if not node.is_fully_expanded() and len(node.untried_moves) > 0:
+            # Choose a random untried move
+            move = random.choice(node.untried_moves)
+            node.untried_moves.remove(move)
+            
+            # Apply the move
+            game.make_move(move, current_player)
             current_player = game.get_opponent(current_player)
+            
+            # Create a new child node
+            child = Node(move, node)
+            child.untried_moves = game.get_valid_moves()
+            node.children[move] = child
+            self.nodes_created += 1
+            
+            return child, game, current_player
 
         return node, game, current_player
 
     def expand(self, parent: Node, game, current_player) -> bool:
-        """Expand a node by adding all possible child nodes
-        
-        Args:
-            parent: The parent node to expand
-            game: The current game state
-            current_player: The player to move
-            
-        Returns:
-            True if the node was expanded, False otherwise
-        """
+        """Expand a node by adding all possible child nodes"""
         if game.is_terminal():
             return False
 
-        # Create a child node for each valid move
-        children = [Node(move, parent) for move in game.get_valid_moves()]
-        parent.add_children(children)
+        # Get all valid moves for the current player
+        if not hasattr(parent, 'untried_moves') or not parent.untried_moves:
+            parent.untried_moves = game.get_valid_moves()
+        
+        if not parent.untried_moves:
+            return False
 
+        # Create a child node for each untried move
+        for move in parent.untried_moves:
+            child = Node(move, parent)
+            parent.children[move] = child
+            self.nodes_created += 1
+        
+        # Clear the untried moves list since all have been expanded
+        parent.untried_moves = []
         return True
 
     def roll_out(self, game, current_player):
-        """Simulate a random game from the current state until terminal
-        
-        Args:
-            game: The current game state
-            current_player: The player to move
-            
-        Returns:
-            The outcome of the game from the perspective of the original player
-        """
+        """Simulate a random game from the current state until terminal"""
         original_player = self.current_player
         
+        # Use a depth limit to avoid extremely long playouts
+        max_playout_depth = 50
+        depth = 0
+        
         # Simulate random moves until the game is over
-        while not game.is_terminal():
+        while not game.is_terminal() and depth < max_playout_depth:
             valid_moves = game.get_valid_moves()
             if not valid_moves:
                 break
@@ -149,6 +162,19 @@ class MCTS:
             move = random.choice(valid_moves)
             game.make_move(move, current_player)
             current_player = game.get_opponent(current_player)
+            depth += 1
+        
+        self.total_playouts += 1
+        
+        # If we hit depth limit but game is not terminal, evaluate position
+        if depth >= max_playout_depth and not game.is_terminal():
+            score = game.evaluate(original_player)
+            if score > 0:
+                return GameMeta.WIN
+            elif score < 0:
+                return GameMeta.LOSS
+            else:
+                return GameMeta.DRAW
         
         # Determine the outcome
         if game.check_win(original_player):
@@ -159,12 +185,7 @@ class MCTS:
             return GameMeta.DRAW
 
     def back_propagate(self, node: Node, outcome: int) -> None:
-        """Update the statistics of the nodes in the path from the node to the root
-        
-        Args:
-            node: The starting node
-            outcome: The outcome of the simulation
-        """
+        """Update the statistics of the nodes in the path from the node to the root"""
         # For win, add 1; for draw, add 0.5; for loss, add 0
         reward = 1.0 if outcome == GameMeta.WIN else (0.5 if outcome == GameMeta.DRAW else 0.0)
 
@@ -182,38 +203,35 @@ class MCTS:
 
         num_rollouts = 0
         while time.time() - start_time < self.thinking_time:
+            # 1. Selection and Expansion
             node, game, current_player = self.select_node()
+            
+            # 2. Simulation
             outcome = self.roll_out(game, current_player)
+            
+            # 3. Backpropagation
             self.back_propagate(node, outcome)
             num_rollouts += 1
 
         run_time = time.time() - start_time
         self.run_time = run_time
         self.num_rollouts = num_rollouts
+        
+        # Print statistics if requested
+        # print(f"Nodes created: {self.nodes_created}, Rollouts: {self.total_playouts}, Time: {run_time:.3f}s")
 
     def best_move(self):
-        """Get the best move according to the most visited node
-        
-        Returns:
-            The best move
-        """
+        """Get the best move according to the most visited node"""
         if not self.root.children:
             return -1  # No valid moves
         
-        # Choose the move with the highest number of visits
-        max_visits = max(self.root.children.values(), key=lambda n: n.N).N
-        max_nodes = [n for n in self.root.children.values() if n.N == max_visits]
-        best_child = max(max_nodes, key=lambda n: n.Q/n.N if n.N > 0 else 0)
-        
+        # Choose the move with the highest exploitation score (Q/N)
+        best_child = max(self.root.children.values(), key=lambda n: n.Q/n.N if n.N > 0 else 0)
         return best_child.move
 
     def statistics(self) -> tuple:
-        """Get statistics about the last search
-        
-        Returns:
-            A tuple (num_rollouts, run_time)
-        """
-        return self.num_rollouts, self.run_time
+        """Get statistics about the last search"""
+        return self.num_rollouts, self.run_time, self.nodes_created
         
     def print_type(self):
         """Print the type of algorithm"""
