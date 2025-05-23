@@ -4,6 +4,7 @@ from game.chess_game import ChessGame, WHITE, BLACK
 from IA.alphabeta import Alphabeta
 from IA.minimax import Minimax
 from IA.mcts import MCTS
+from view.chessView import ChessGUI
 
 # Try to import tqdm for progress bar
 try:
@@ -141,50 +142,11 @@ def human_vs_ai():
     else:
         print("Invalid choice, using Alpha-Beta")
         ai = Alphabeta(2)
-    
-    print("You are playing as White (uppercase pieces)")
-    print("Enter moves in simple algebraic notation, e.g. 'e2e4'")
-    display_board(game.get_board())
-    
-    while not game.is_terminal():
-        if current_player == WHITE:  # Human's turn
-            valid_moves = game.get_valid_moves()
-            move_str = input("Your move: ")
-            try:
-                move = algebraic_to_coords(move_str)
-                if move not in valid_moves:
-                    print("Invalid move! Try again.")
-                    continue
-            except:
-                print("Please enter a valid move in format 'e2e4'")
-                continue
-        else:  # AI's turn
-            print("AI is thinking...")
-            start_time = time.time()
-            move = ai.get_move(game, current_player)
-            end_time = time.time()
-            print(f"AI chose {coords_to_algebraic(move)} in {end_time - start_time:.3f}s")
-        
-        game.make_move(move, current_player)
-        display_board(game.get_board())
-        
-        if game.check_win(current_player):
-            if current_player == WHITE:
-                print("Congratulations! You win!")
-            else:
-                print("AI wins this time!")
-            return
-        
-        # Switch players
-        current_player = game.get_opponent(current_player)
-    
-    print("Game over!")
-    if game._is_in_check(WHITE):
-        print("Black (AI) wins by checkmate!")
-    elif game._is_in_check(BLACK):
-        print("White (You) win by checkmate!")
-    else:
-        print("It's a draw!")
+    import tkinter as tk
+    import tkinter.messagebox
+    root = tk.Tk()
+    app = ChessGUI(root, ai_player=BLACK, ai_algo=2)  # Humain = blanc, IA = noir
+    root.mainloop()
 
 # Move play_single_game outside of play_tournament to make it picklable
 def play_single_game(pair):
@@ -358,6 +320,7 @@ def main():
             ai2 = MCTS(depth2)
         
         # Play game
+
         play_game(ai1, ai2, verbose=True)
     
     elif choice == '2':
