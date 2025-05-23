@@ -72,8 +72,11 @@ class Alphabeta:
         if depth == 0 or game.is_terminal():
             return game.evaluate(player)
         
-        # Create a hash key for the current position
-        board_hash = str(game.board.tobytes())
+        # Create a hash key for the current position - handle both NumPy arrays and lists
+        if hasattr(game.board, 'tobytes'):
+            board_hash = str(game.board.tobytes())
+        else:
+            board_hash = str(game.board)
         state_key = (board_hash, depth, tour_max, player)
         
         # Check if position is in transposition table
@@ -137,7 +140,7 @@ class Alphabeta:
             self.transposition_table[state_key] = best_score
             return best_score
 
-    def order_moves(self, game, moves, current_player, ply):
+    def order_moves(self, game, valid_moves, player, depth):
         """
         Order moves for better alpha-beta pruning
         1. Captures ordered by MVV-LVA (Most Valuable Victim - Least Valuable Aggressor)
@@ -145,37 +148,52 @@ class Alphabeta:
         3. History heuristic
         4. Remaining moves
         """
-        # Piece values for MVV-LVA
-        piece_values = {1: 1, 2: 3, 3: 3, 5: 5, 9: 9, 100: 10}  # PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING
-        
-        # Score each move
-        move_scores = []
-        
-        for move in moves:
-            score = 0
-            from_pos, to_pos = move
-            from_row, from_col = from_pos
-            to_row, to_col = to_pos
+        # Check if we're dealing with Connect4 moves (integers) or Chess moves (tuples)
+        if valid_moves and isinstance(valid_moves[0], int):
+            # Connect4 game - moves are column numbers (integers)
+            # Simple heuristic: prefer center columns
+            board_width = len(game.get_board()[0]) if hasattr(game, 'get_board') else 7
+            center = board_width // 2
             
-            moving_piece = abs(game.board[from_row][from_col])
-            target_piece = abs(game.board[to_row][to_col])
+            # Rate moves based on proximity to center
+            move_scores = [(move, -abs(move - center)) for move in valid_moves]
             
-            # 1. Captures (MVV-LVA)
-            if target_piece > 0:  # If it's a capture
-                # Most Valuable Victim (target) - Least Valuable Aggressor (moving piece)
-                score += 10000 + piece_values[target_piece] * 100 - piece_values[moving_piece]
+            # Sort moves by their scores (higher score first)
+            move_scores.sort(key=lambda x: x[1], reverse=True)
+            ordered_moves = [move for move, _ in move_scores]
+            return ordered_moves
+        else:
+            # Chess game - moves are tuples
+            move_scores = []
             
-            # 2. Killer moves
-            if move in self.killer_moves[ply]:
-                score += 9000
+            # Define piece values if not defined elsewhere
+            piece_values = {1: 1, 2: 3, 3: 3, 4: 5, 5: 9, 6: 100}
             
-            # 3. History heuristic
-            score += self.history_table.get(move, 0)
+            for move in valid_moves:
+                from_pos, to_pos = move
+                from_row, from_col = from_pos
+                to_row, to_col = to_pos
+                
+                moving_piece = abs(game.board[from_row][from_col])
+                target_piece = abs(game.board[to_row][to_col])
+                
+                score = 0
+                # 1. Captures (MVV-LVA)
+                if target_piece > 0:  # If it's a capture
+                    # Most Valuable Victim (target) - Least Valuable Aggressor (moving piece)
+                    score += 10000 + piece_values[target_piece] * 100 - piece_values[moving_piece]
+                
+                # 2. Killer moves
+                if move in self.killer_moves[depth]:
+                    score += 9000
+                
+                # 3. History heuristic
+                score += self.history_table.get(move, 0)
+                
+                move_scores.append((move, score))
             
-            move_scores.append((move, score))
-        
-        # Sort by score in descending order
-        return [move for move, score in sorted(move_scores, key=lambda x: x[1], reverse=True)]
+            # Sort by score in descending order
+            return [move for move, score in sorted(move_scores, key=lambda x: x[1], reverse=True)]
 
     def record_killer_move(self, move, ply):
         """Record a killer move at the current ply"""

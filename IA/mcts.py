@@ -56,29 +56,6 @@ class MCTS:
         self.nodes_created = 0
         self.total_playouts = 0
     
-    def get_move(self, game, player):
-        """Get the best move according to the MCTS algorithm"""
-        self.root_game = game.clone()  # Only clone once at the beginning
-        self.current_player = player
-        self.root = Node(None, None)
-        
-        # Initialize root's untried moves
-        self.root.untried_moves = self.root_game.get_valid_moves()
-        
-        # Track nodes and playouts
-        self.nodes_created = 1  # Root
-        self.total_playouts = 0
-        
-        # Check if game is already over
-        if game.is_terminal():
-            return -1
-        
-        # Run the MCTS algorithm
-        self.search()
-        
-        # Get the best move
-        return self.best_move()
-
     def select_node(self) -> tuple:
         """Select a node to expand or simulate using UCB1"""
         node = self.root
@@ -88,10 +65,17 @@ class MCTS:
         # Selection phase - traverse tree until we find a node to expand
         while not node.is_fully_expanded() and len(node.children) > 0:
             # Select child with highest UCB value
-            children = node.children.values()
+            children = list(node.children.values())
+            if not children:  # Ensure we have children to evaluate
+                break
+                
             max_value = max(children, key=lambda n: n.value()).value()
             max_nodes = [n for n in children if n.value() == max_value]
-
+            
+            # Ensure max_nodes is not empty before choosing
+            if not max_nodes:
+                break
+                
             # Choose randomly among the best nodes
             node = random.choice(max_nodes)
             
@@ -104,7 +88,7 @@ class MCTS:
                 return node, game, current_player
 
         # Expansion phase - if we reach a leaf node that's not fully expanded
-        if not node.is_fully_expanded() and len(node.untried_moves) > 0:
+        if not node.is_fully_expanded() and node.untried_moves:  # Check that untried_moves is not empty
             # Choose a random untried move
             move = random.choice(node.untried_moves)
             node.untried_moves.remove(move)
@@ -115,7 +99,7 @@ class MCTS:
             
             # Create a new child node
             child = Node(move, node)
-            child.untried_moves = game.get_valid_moves()
+            child.untried_moves = game.get_valid_moves() or []  # Ensure it's never None
             node.children[move] = child
             self.nodes_created += 1
             
@@ -156,7 +140,7 @@ class MCTS:
         # Simulate random moves until the game is over
         while not game.is_terminal() and depth < max_playout_depth:
             valid_moves = game.get_valid_moves()
-            if not valid_moves:
+            if not valid_moves:  # This check is already here, which is good
                 break
             
             move = random.choice(valid_moves)
@@ -228,6 +212,30 @@ class MCTS:
         # Choose the move with the highest exploitation score (Q/N)
         best_child = max(self.root.children.values(), key=lambda n: n.Q/n.N if n.N > 0 else 0)
         return best_child.move
+
+    def get_move(self, game, player):
+        """Get the best move according to the MCTS algorithm"""
+        self.root_game = game.clone()  # Only clone once at the beginning
+        self.current_player = player
+        self.root = Node(None, None)
+        
+        # Initialize root's untried moves
+        valid_moves = self.root_game.get_valid_moves()
+        self.root.untried_moves = valid_moves if valid_moves else []  # Ensure it's never None
+        
+        # Track nodes and playouts
+        self.nodes_created = 1  # Root
+        self.total_playouts = 0
+        
+        # Check if game is already over
+        if game.is_terminal():
+            return -1
+        
+        # Run the MCTS algorithm
+        self.search()
+        
+        # Get the best move
+        return self.best_move()
 
     def statistics(self) -> tuple:
         """Get statistics about the last search"""
