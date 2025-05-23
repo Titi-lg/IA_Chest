@@ -145,7 +145,7 @@ def human_vs_ai():
     import tkinter as tk
     import tkinter.messagebox
     root = tk.Tk()
-    app = ChessGUI(root, ai_player=BLACK, ai_algo=2)  # Humain = blanc, IA = noir
+    app = ChessGUI(root, ai_player=BLACK, ai_algo=ai)  # Humain = blanc, IA = noir
     root.mainloop()
 
 # Move play_single_game outside of play_tournament to make it picklable
